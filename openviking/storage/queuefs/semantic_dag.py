@@ -49,7 +49,7 @@ class SemanticDagExecutor:
         max_concurrent_llm: int,
         ctx: RequestContext,
         incremental_update: bool = False,
-        target_uri_root: Optional[str] = None,
+        target_uri: Optional[str] = None,
         semantic_msg_id: Optional[str] = None,
         lock_resource_uri: str = "",
         lock_id: str = "",
@@ -59,7 +59,7 @@ class SemanticDagExecutor:
         self._max_concurrent_llm = max_concurrent_llm
         self._ctx = ctx
         self._incremental_update = incremental_update
-        self._target_uri_root = target_uri_root
+        self._target_uri = target_uri
         self._semantic_msg_id = semantic_msg_id
         self._lock_resource_uri = lock_resource_uri
         self._lock_id = lock_id
@@ -168,6 +168,7 @@ class SemanticDagExecutor:
         file_paths: List[str] = []
 
         for entry in entries:
+            logger.debug(f"Processing entry: {entry}")
             name = entry.get("name", "")
             if not name or name.startswith(".") or name in [".", ".."]:
                 continue
@@ -176,18 +177,21 @@ class SemanticDagExecutor:
             if entry.get("isDir", False):
                 children_dirs.append(item_uri)
             else:
+                logger.debug(f"Adding file {item_uri} to file_paths")
                 file_paths.append(item_uri)
 
         return children_dirs, file_paths
 
     def _get_target_file_path(self, current_uri: str) -> Optional[str]:
-        if not self._incremental_update or not self._target_uri_root or not self._root_uri:
+        if not self._incremental_update or not self._target_uri or not self._root_uri:
+            logger.warning(f"Invalid target_uri or root_uri for incremental update: target_uri={self._target_uri}, root_uri={self._root_uri}")
             return None
         try:
+            logger.debug(f"Mapping {current_uri} to target root {self._target_uri}, root_uri={self._root_uri}")
             relative_path = current_uri[len(self._root_uri):]
             if relative_path.startswith("/"):
                 relative_path = relative_path[1:]
-            return f"{self._target_uri_root}/{relative_path}" if relative_path else self._target_uri_root
+            return f"{self._target_uri}/{relative_path}" if relative_path else self._target_uri
         except Exception:
             return None
 
@@ -199,6 +203,7 @@ class SemanticDagExecutor:
         try:
             current_content = await self._viking_fs.read_file(file_path, ctx=self._ctx)
             target_content = await self._viking_fs.read_file(target_path, ctx=self._ctx)
+            logger.debug(f"Comparing content of {file_path} with {target_path}: current={current_content[:100]}..., target={target_content[:100]}...")
             return current_content != target_content
         except Exception:
             return True
@@ -208,6 +213,7 @@ class SemanticDagExecutor:
         if not target_path:
             return None
         try:
+            logger.debug(f"Reading existing summary for file {file_path} from {target_path}")
             vector_store = self._viking_fs._get_vector_store()
             if not vector_store:
                 return None
@@ -218,7 +224,8 @@ class SemanticDagExecutor:
             )
             if records and len(records) > 0:
                 record = records[0]
-                summary = record.get("summary", "")
+                logger.debug(f"Found record for {target_path}: {record}")
+                summary = record.get("abstract", "")
                 if summary:
                     file_name = file_path.split("/")[-1]
                     return {"name": file_name, "summary": summary}
@@ -228,16 +235,20 @@ class SemanticDagExecutor:
 
     async def _check_dir_children_changed(self, dir_uri: str, current_files: List[str], current_dirs: List[str]) -> bool:
         target_path = self._get_target_file_path(dir_uri)
+        logger.debug(f"Checking if children of {dir_uri} have changed relative to {target_path}")
         if not target_path:
             return True
         try:
-            target_files, target_dirs = await self._list_dir(target_path)
+            target_dirs, target_files = await self._list_dir(target_path)
+            logger.debug(f"Listing children of {dir_uri} from {target_path}: files={target_files}, dirs={target_dirs}")
             current_file_names = {f.split("/")[-1] for f in current_files}
             target_file_names = {f.split("/")[-1] for f in target_files}
+            logger.debug(f"Comparing children files of {dir_uri}: current={current_file_names}, target={target_file_names}")
             if current_file_names != target_file_names:
                 return True
             current_dir_names = {d.split("/")[-1] for d in current_dirs}
             target_dir_names = {d.split("/")[-1] for d in target_dirs}
+            logger.debug(f"Comparing children directories of {dir_uri}: current={current_dir_names}, target={target_dir_names}")
             if current_dir_names != target_dir_names:
                 return True
             for current_file in current_files:
@@ -267,6 +278,7 @@ class SemanticDagExecutor:
             summary_dict = None
             if self._incremental_update:
                 content_changed = await self._check_file_content_changed(file_path)
+                logger.debug(f"Content changed for {file_path}: {content_changed}")
                 if not content_changed:
                     summary_dict = await self._read_existing_summary(file_path)
                     need_vectorize = False
@@ -372,7 +384,7 @@ class SemanticDagExecutor:
         node = self._nodes.get(dir_uri)
         if not node:
             return
-
+        need_vectorize = not self._incremental_update
         try:
             overview = None
             abstract = None
@@ -380,7 +392,9 @@ class SemanticDagExecutor:
                 children_changed = await self._check_dir_children_changed(
                     dir_uri, node.file_paths, node.children_dirs
                 )
+                logger.debug(f"Children changed for {dir_uri}: {children_changed}")
                 if not children_changed:
+                    need_vectorize = False
                     overview, abstract = await self._read_existing_overview_abstract(dir_uri)
             if overview is None or abstract is None:
                 async with node.lock:
@@ -399,10 +413,11 @@ class SemanticDagExecutor:
                 logger.warning(f"Failed to write overview/abstract for {dir_uri}: {e}")
 
             try:
-                logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {dir_uri}")
-                await self._processor._vectorize_directory_simple(
-                    dir_uri, self._context_type, abstract, overview, ctx=self._ctx,
-                    semantic_msg_id=self._semantic_msg_id,
+                if need_vectorize:
+                    logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {dir_uri}")
+                    await self._processor._vectorize_directory_simple(
+                        dir_uri, self._context_type, abstract, overview, ctx=self._ctx,
+                        semantic_msg_id=self._semantic_msg_id,
                     lock_resource_uri=self._lock_resource_uri,
                     lock_id=self._lock_id,
                 )

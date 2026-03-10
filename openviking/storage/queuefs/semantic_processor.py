@@ -170,7 +170,7 @@ class SemanticProcessor(DequeueHandlerBase):
             self._current_msg = msg
             self._current_ctx = self._ctx_from_semantic_msg(msg)
             logger.info(
-                f"Processing semantic generation for: {msg.uri} (recursive={msg.recursive})"
+                f"Processing semantic generation for: {msg})"
             )
 
             if msg.recursive:
@@ -180,7 +180,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     max_concurrent_llm=self.max_concurrent_llm,
                     ctx=self._current_ctx,
                     incremental_update=msg.is_incremental_update,
-                    target_uri_root=msg.target_uri_root if msg.target_uri_root else None,
+                    target_uri=msg.target_uri if msg.target_uri else None,
                     semantic_msg_id=msg.id,
                     lock_resource_uri=msg.lock_resource_uri,
                     lock_id=msg.lock_id,
@@ -212,15 +212,15 @@ class SemanticProcessor(DequeueHandlerBase):
                     logger.warning(f"Failed to list directory {msg.uri}: {e}")
 
                 incremental_update = msg.is_incremental_update
-                target_uri_root = msg.target_uri_root if msg.target_uri_root else None
+                target_uri = msg.target_uri if msg.target_uri else None
 
-                if incremental_update and target_uri_root:
+                if incremental_update and target_uri:
                     children_changed = await self._check_dir_children_changed(
-                        msg.uri, file_paths, children_uris, target_uri_root
+                        msg.uri, file_paths, children_uris, target_uri
                     )
                     if not children_changed:
                         overview, abstract = await self._read_existing_overview_abstract(
-                            msg.uri, target_uri_root
+                            msg.uri, target_uri
                         )
                         if overview and abstract:
                             await viking_fs.write_file(f"{msg.uri}/.overview.md", overview, ctx=self._current_ctx)
@@ -249,7 +249,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     children_uris=children_uris,
                     file_paths=file_paths,
                     incremental_update=incremental_update,
-                    target_uri_root=target_uri_root,
+                    target_uri=target_uri,
                     semantic_msg_id=msg.id,
                     lock_resource_uri=msg.lock_resource_uri,
                     lock_id=msg.lock_id,
@@ -278,7 +278,7 @@ class SemanticProcessor(DequeueHandlerBase):
         children_uris: List[str],
         file_paths: List[str],
         incremental_update: bool = False,
-        target_uri_root: Optional[str] = None,
+        target_uri: Optional[str] = None,
         semantic_msg_id: Optional[str] = None,
         lock_resource_uri: str = "",
         lock_id: str = "",
@@ -294,7 +294,7 @@ class SemanticProcessor(DequeueHandlerBase):
             parent_uri=uri, 
             enqueue_files=True,
             incremental_update=incremental_update,
-            target_uri_root=target_uri_root,
+            target_uri=target_uri,
             semantic_msg_id=semantic_msg_id,
         )
 
@@ -401,7 +401,7 @@ class SemanticProcessor(DequeueHandlerBase):
         parent_uri: Optional[str] = None,
         enqueue_files: bool = False,
         incremental_update: bool = False,
-        target_uri_root: Optional[str] = None,
+        target_uri: Optional[str] = None,
         semantic_msg_id: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         """Concurrently generate file summaries."""
@@ -410,12 +410,12 @@ class SemanticProcessor(DequeueHandlerBase):
 
         async def generate_one_summary(file_path: str) -> Dict[str, str]:
             summary = None
-            if incremental_update and target_uri_root:
+            if incremental_update and target_uri:
                 content_changed = await self._check_file_content_changed(
-                    file_path, target_uri_root
+                    file_path, target_uri
                 )
                 if not content_changed:
-                    summary = await self._read_existing_summary(file_path, target_uri_root)
+                    summary = await self._read_existing_summary(file_path, target_uri)
             
             if summary is None:
                 summary = await self._generate_single_file_summary(file_path, ctx=self._current_ctx)
@@ -730,19 +730,19 @@ class SemanticProcessor(DequeueHandlerBase):
             semantic_msg_id=semantic_msg_id,
         )
 
-    def _get_target_file_path(self, current_uri: str, target_uri_root: str) -> Optional[str]:
+    def _get_target_file_path(self, current_uri: str, target_uri: str) -> Optional[str]:
         """Get target file path for incremental update."""
         try:
             relative_path = current_uri[len(self._current_msg.uri):] if self._current_msg else ""
             if relative_path.startswith("/"):
                 relative_path = relative_path[1:]
-            return f"{target_uri_root}/{relative_path}" if relative_path else target_uri_root
+            return f"{target_uri}/{relative_path}" if relative_path else target_uri
         except Exception:
             return None
 
-    async def _check_file_content_changed(self, file_path: str, target_uri_root: str) -> bool:
+    async def _check_file_content_changed(self, file_path: str, target_uri: str) -> bool:
         """Check if file content has changed."""
-        target_path = self._get_target_file_path(file_path, target_uri_root)
+        target_path = self._get_target_file_path(file_path, target_uri)
         if not target_path:
             return True
         try:
@@ -753,9 +753,9 @@ class SemanticProcessor(DequeueHandlerBase):
         except Exception:
             return True
 
-    async def _read_existing_summary(self, file_path: str, target_uri_root: str) -> Optional[Dict[str, str]]:
+    async def _read_existing_summary(self, file_path: str, target_uri: str) -> Optional[Dict[str, str]]:
         """Read existing summary from vector store."""
-        target_path = self._get_target_file_path(file_path, target_uri_root)
+        target_path = self._get_target_file_path(file_path, target_uri)
         if not target_path:
             return None
         try:
@@ -779,10 +779,10 @@ class SemanticProcessor(DequeueHandlerBase):
         return None
 
     async def _check_dir_children_changed(
-        self, dir_uri: str, current_files: List[str], current_dirs: List[str], target_uri_root: str
+        self, dir_uri: str, current_files: List[str], current_dirs: List[str], target_uri: str
     ) -> bool:
         """Check if directory children have changed."""
-        target_path = self._get_target_file_path(dir_uri, target_uri_root)
+        target_path = self._get_target_file_path(dir_uri, target_uri)
         if not target_path:
             return True
         try:
@@ -810,17 +810,17 @@ class SemanticProcessor(DequeueHandlerBase):
                 return True
             
             for current_file in current_files:
-                if await self._check_file_content_changed(current_file, target_uri_root):
+                if await self._check_file_content_changed(current_file, target_uri):
                     return True
             return False
         except Exception:
             return True
 
     async def _read_existing_overview_abstract(
-        self, dir_uri: str, target_uri_root: str
+        self, dir_uri: str, target_uri: str
     ) -> tuple[Optional[str], Optional[str]]:
         """Read existing overview and abstract from target directory."""
-        target_path = self._get_target_file_path(dir_uri, target_uri_root)
+        target_path = self._get_target_file_path(dir_uri, target_uri)
         if not target_path:
             return None, None
         try:

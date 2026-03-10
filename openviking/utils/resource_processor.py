@@ -157,6 +157,7 @@ class ResourceProcessor:
             if not target.startswith("viking://"):
                 target = f"viking://resources/{target}"
             logger.info(f"Using target location: {target}")
+        logger.info(f"Processing resource: {path} (scope={scope}, user={user}, reason={reason}, instruction={instruction}, target={target})")
         update_ctx = UpdateContext(source_url=path, target_uri=target, request_context=ctx)
         update_ctx.scope = scope
 
@@ -280,6 +281,7 @@ class ResourceProcessor:
 
         # ============ Phase 4: Optional Steps ============
         lock_resource_uri = update_ctx.target_uri
+        logger.info(f"Lock resource URI: {lock_resource_uri}, update_ctx.target_uri: {update_ctx.target_uri}")
         lock_id = update_ctx.lock_info.lock_id if update_ctx.lock_info else ""
         
         if summarize:
@@ -296,6 +298,8 @@ class ResourceProcessor:
                     resource_uris=[result["root_uri"]],
                     ctx=ctx,
                     skip_vectorization=skip_vec,
+                    is_incremental_update=update_ctx.is_incremental,
+                    target_uri=update_ctx.target_uri,
                     lock_resource_uri=lock_resource_uri,
                     lock_id=lock_id,
                     **kwargs
@@ -322,6 +326,8 @@ class ResourceProcessor:
                     resource_uris=[result["root_uri"]],
                     ctx=ctx,
                     skip_vectorization=False,
+                    is_incremental_update=update_ctx.is_incremental,
+                    target_uri=update_ctx.target_uri,
                     lock_resource_uri=lock_resource_uri,
                     lock_id=lock_id,
                     **kwargs

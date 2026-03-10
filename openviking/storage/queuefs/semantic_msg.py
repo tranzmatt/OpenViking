@@ -40,7 +40,7 @@ class SemanticMsg:
     # Additional flags
     skip_vectorization: bool = False
     is_incremental_update: bool = False
-    target_uri_root: str = ""
+    target_uri: str = ""
     # Lock release info
     lock_resource_uri: str = ""
     lock_id: str = ""
@@ -56,7 +56,7 @@ class SemanticMsg:
         role: str = "root",
         skip_vectorization: bool = False,
         is_incremental_update: bool = False,
-        target_uri_root: str = "",
+        target_uri: str = "",
         lock_resource_uri: str = "",
         lock_id: str = "",
     ):
@@ -70,7 +70,7 @@ class SemanticMsg:
         self.role = role
         self.skip_vectorization = skip_vectorization
         self.is_incremental_update = is_incremental_update
-        self.target_uri_root = target_uri_root
+        self.target_uri = target_uri
         self.lock_resource_uri = lock_resource_uri
         self.lock_id = lock_id
 
@@ -109,7 +109,7 @@ class SemanticMsg:
             role=data.get("role", "root"),
             skip_vectorization=data.get("skip_vectorization", False),
             is_incremental_update=data.get("is_incremental_update", False),
-            target_uri_root=data.get("target_uri_root", ""),
+            target_uri=data.get("target_uri", ""),
             lock_resource_uri=data.get("lock_resource_uri", ""),
             lock_id=data.get("lock_id", ""),
         )

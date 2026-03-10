@@ -29,6 +29,8 @@ class Summarizer:
         resource_uris: List[str],
         ctx: "RequestContext",
         skip_vectorization: bool = False,
+        is_incremental_update: bool = False,
+        target_uri: str = "",
         lock_resource_uri: str = "",
         lock_id: str = "",
         **kwargs
@@ -44,6 +46,7 @@ class Summarizer:
             lock_resource_uri: Resource URI for lock release on completion
             lock_id: Lock ID for release on completion
         """
+        logger.info(f"Summarizing resources: {resource_uris} (skip_vectorization={skip_vectorization}, is_incremental_update={is_incremental_update}, target_uri={target_uri}, lock_resource_uri={lock_resource_uri}, lock_id={lock_id})")
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         
@@ -64,6 +67,8 @@ class Summarizer:
                 agent_id=ctx.user.agent_id,
                 role=ctx.role.value,
                 skip_vectorization=skip_vectorization,
+                is_incremental_update=is_incremental_update,
+                target_uri=target_uri,
                 lock_resource_uri=lock_resource_uri,
                 lock_id=lock_id,
             )

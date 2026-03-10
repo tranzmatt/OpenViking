@@ -133,6 +133,7 @@ class TreeBuilder:
 
         # 3. Determine base_uri
         auto_base_uri = self._get_base_uri(scope, source_path, source_format)
+        logger.info(f"[TreeBuilder] Auto base URI: {auto_base_uri}")
 
         # 4. Check if base_uri exists - if it does, use it as parent directory
         base_exists = False
@@ -143,7 +144,13 @@ class TreeBuilder:
             except Exception:
                 base_exists = False
 
-        if base_exists:
+        # When user explicitly specifies target_uri, use it directly
+        # Only create subdirectory when base_uri is auto-generated
+        user_specified_target = base_uri and base_uri != auto_base_uri
+        
+        if user_specified_target:
+            final_uri = base_uri
+        elif base_exists:
             if "/" in final_doc_name:
                 repo_name_only = final_doc_name.split("/")[-1]
             else:
@@ -195,10 +202,16 @@ class TreeBuilder:
             source_path=source_path,
             source_format=source_format,
         )
-        tree._root_uri = final_uri
+        if update_ctx.is_incremental:
+            tree._root_uri = temp_doc_uri
+        else:
+            tree._root_uri = final_uri
         
         # Create a minimal Context object for the root so that tree.root is not None
-        root_context = Context(uri=final_uri)
+        if update_ctx.is_incremental:
+            root_context = Context(uri=temp_doc_uri)
+        else:
+            root_context = Context(uri=final_uri)
         tree.add_context(root_context)
         
         return tree
