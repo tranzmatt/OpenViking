@@ -155,13 +155,43 @@ jobs:
         echo "Published to PyPI (or already existed) with version: $VERSION"
         echo "::notice::Published to PyPI (or already existed) with version: $VERSION"
 
-  docker:
-    name: Build and Push Docker Image
+  docker-metadata:
+    name: Prepare Docker metadata
     needs: [build, permission-check]
     if: >-
       needs.permission-check.outputs.allowed == 'true' &&
       github.event_name == 'release'
     runs-on: ubuntu-24.04
+    outputs:
+      tags: ${{ steps.meta.outputs.tags }}
+      labels: ${{ steps.meta.outputs.labels }}
+      version: ${{ github.event.release.tag_name }}
+    permissions:
+      contents: read
+    steps:
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+
+  docker-build:
+    name: Build Docker image (${{ matrix.platform }})
+    needs: [build, permission-check, docker-metadata]
+    if: >-
+      needs.permission-check.outputs.allowed == 'true' &&
+      github.event_name == 'release'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            artifact_suffix: linux-amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            artifact_suffix: linux-arm64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -180,25 +210,83 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/${{ github.repository }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+      - name: Build and push platform image
+        id: build_image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ needs.docker-metadata.outputs.labels }}
+          tags: ghcr.io/${{ github.repository }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            OPENVIKING_VERSION=${{ needs.docker-metadata.outputs.version }}
+
+      - name: Export image digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build_image.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload image digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.artifact_suffix }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  docker:
+    name: Build and Push Docker Image
+    needs: [docker-metadata, docker-build]
+    if: >-
+      needs.docker-metadata.result == 'success' &&
+      needs.docker-build.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Log in to the Container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v7
+      - name: Download image digests
+        uses: actions/download-artifact@v4
         with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            OPENVIKING_VERSION=${{ github.event.release.tag_name }}
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Create manifest list and push
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          tag_args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && tag_args+=("-t" "$tag")
+          done <<'EOF'
+          ${{ needs.docker-metadata.outputs.tags }}
+          EOF
+
+          digest_args=()
+          for digest in *; do
+            digest_args+=("ghcr.io/${{ github.repository }}@sha256:${digest}")
+          done
+
+          docker buildx imagetools create "${tag_args[@]}" "${digest_args[@]}"
+
+      - name: Inspect published image
+        run: |
+          first_tag="$(printf '%s\n' '${{ needs.docker-metadata.outputs.tags }}' | head -n 1)"
+          docker buildx imagetools inspect "$first_tag"
