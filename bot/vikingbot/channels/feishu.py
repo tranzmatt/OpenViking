@@ -754,6 +754,7 @@ class FeishuChannel(BaseChannel):
             if hasattr(message, 'mentions') and message.mentions and bot_open_id:
                 for mention in message.mentions:
                     if hasattr(mention, 'id') and hasattr(mention.id, 'open_id'):
+                        logger.info(f"OpenID: {mention.id.open_id}")
                         at_id = mention.id.open_id
                         if at_id == bot_open_id:
                             is_mentioned = True
