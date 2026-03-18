@@ -440,7 +440,10 @@ class AgentLoop:
             if cmd == "/new":
                 # Clone session for async consolidation, then immediately clear original
                 if not self._check_cmd_auth(msg):
-                    return None
+                    return OutboundMessage(
+                        session_key=msg.session_key, content="🐈 Sorry, you are not authorized to use this command.",
+                        metadata=msg.metadata
+                    )
                 session_clone = session.clone()
                 session.clear()
                 await self.sessions.save(session)
@@ -451,7 +454,10 @@ class AgentLoop:
                 )
             if cmd == "/remember":
                 if not self._check_cmd_auth(msg):
-                    return None
+                    return OutboundMessage(
+                        session_key=msg.session_key, content="🐈 Sorry, you are not authorized to use this command.",
+                        metadata=msg.metadata
+                    )
                 session_clone = session.clone()
                 session.clear()
                 await self.sessions.save(session)
